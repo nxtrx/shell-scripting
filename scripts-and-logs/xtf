@@ -1,0 +1,302 @@
+#!/bin/bash
+
+# -------------------------------------------------------------------------------
+# Variables
+# -------------------------------------------------------------------------------
+# Description:
+#       - Simply just variables innit
+#       - datetime_pattern stores this pattern [YYYY-MM-DD HH:MM:SS]
+# -------------------------------------------------------------------------------
+
+#Vars for filtering
+uTrader=""
+dateAfter=""
+dateBefore=""
+uCurrency=""
+uInstruction=""
+uLog=""
+
+#Others
+help=0
+traderCurrencies=""
+datetime_pattern="^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$"
+
+# -------------------------------------------------------------------------------
+# Options logic
+# -------------------------------------------------------------------------------
+# Description:
+#       - Using getopts to parse options
+#       - -a -> dateAfter
+#       - -b -> dateBefore
+#       - -c -> currency
+# -------------------------------------------------------------------------------
+
+while getopts a:b:c:h o                                                                                   
+do
+    case "$o" in
+    a)  dateAfter=$OPTARG
+        if ! echo "$dateAfter" | grep -qE "$datetime_pattern"; then #Checking if date is in the right format
+            exit 1
+        fi
+    ;;
+
+    b)  dateBefore=$OPTARG
+        if ! echo "$dateBefore" | grep -qE "$datetime_pattern"; then #Checking if date is in the right format
+            exit 1
+        fi
+    ;;
+
+    c)  uCurrency=$OPTARG
+    ;;
+    
+    h)  help=1
+    ;;
+        
+    *)  echo "Oops something went wwong! :3"
+        echo "Considew using the fowwowing command:"
+        echo "xtf -h"
+        exit 1
+    ;;
+    esac
+done
+
+if [ -z "$1" ]; then
+    help=1
+    else
+    shift $((OPTIND-1))
+fi
+
+# -------------------------------------------------------------------------------
+# help instruction
+# -------------------------------------------------------------------------------
+# Description:
+#       - just help innit
+# -------------------------------------------------------------------------------
+
+if [ "$help" -eq 1 ]
+then
+    echo ""
+    echo "POUŽITÍ: xtf [-h] [FILTR] [PŘÍKAZ] UŽIVATEL LOG [LOG2 [...]]"
+    echo ""
+    echo "PŘÍKAZ:"
+    echo "    list            Výpis záznamů pro daného uživatele"
+    echo "    list-currency   Výpis seřazeného seznamu vyskytujících se měn"
+    echo "    status          Výpis skutečného stavu účtu seskupeného a seřazeného dle jednotlivých měn"
+    echo "    profit          Výpis stavu účtu zákazníka se započítaným fiktivním výnosem"
+    echo "FILTR:"
+    echo "    -h              Nápověda"
+    echo "    -a DATETIME     Záznamy PO tomto datu a čase (bez něj)"
+    echo "    -b DATETIME     Záznamy PŘED tímto datem a časem (bez něj)"
+    echo "    -c CURRENCY     Záznamy odpovídající dané měně"
+    echo "FORMÁT:"
+    echo "    DATETIME        [YYYY-MM-DD HH:MM:SS]"
+    exit 0
+fi
+
+# -------------------------------------------------------------------------------
+# Argument logic + File handling logic
+# -------------------------------------------------------------------------------
+# Format:
+#       - xtf [-h|--help] [FILTR] [PŘÍKAZ] UŽIVATEL LOG [LOG2 [...]
+#
+# Description:
+#       - Defaulting to instruction "list" if no arguments is given
+#       - Checks for missing arguments
+#       - Checks if arguments after instruction and trader name are files, 
+#         only files are expected
+#       - Logic for handling .gz files
+#       - Concatenating them into a newline deliminated string
+# -------------------------------------------------------------------------------
+
+if [ "$1" != "list" ] && [ "$1" != "list-currency" ] && [ "$1" != "status" ] && [ "$1" != "profit" ]
+then #No instruction given
+    uInstruction="list" #Defaulting to "list"
+    uTrader="$1" 
+    shift
+
+    if [ -z "$1" ]; then #Missing args check
+        exit 1
+    fi
+
+    for value in "$@" #File check
+    do
+        if [ ! -f "$value" ]; then
+            exit 1
+        fi
+    done
+
+    for file in "$@"; do #.gz file handling
+        if [ "${file##*.}" = "gz" ] ; then
+            gzip -dk "$file"
+            uLog="${uLog}$(cat "${file%.gz}")"$'\n'
+        else
+            uLog="${uLog}$(cat "${file%.gz}")"$'\n'
+        fi
+    done
+
+    uLog="${uLog#" "}" #Deleting leading space cause by idk what
+
+    
+
+else #Instruction was given
+    uInstruction="$1"
+    uTrader="$2"
+    shift 2
+
+    if [ -z "$1" ]; then #Missing args check
+        exit 1
+    fi
+
+    for value in "$@" #File check
+    do
+        if [ ! -f "$value" ]; then
+            exit 1
+        fi
+    done
+
+    for file in "$@"; do #.gz file handling
+        if [ "${file##*.}" = "gz" ] ; then
+            gzip -dk "$file"
+            uLog="${uLog}$(cat "${file%.gz}")"$'\n'
+        else
+            uLog="${uLog}$(cat "${file%.gz}")"$'\n'
+        fi
+    done
+
+    uLog="${uLog#" "}" #Deleting leading space cause by idk what
+
+fi
+
+# -------------------------------------------------------------------------------
+# Filtering using options
+# -------------------------------------------------------------------------------
+# Description:
+#       - a
+#           - awk is given the whole log, it deletes lines with dates before
+#             the date given in the argument
+#       - b
+#           - same as a just with dates after the argument
+#       - c
+#           - awk is given the whole log, it deletes lines with differing
+#             currencies from the one given in the argument  
+# -------------------------------------------------------------------------------
+
+if [ -n "$dateAfter" ]; then # -a
+    uLog=$(echo "$uLog" | awk -v date="$dateAfter" -F ';' '{ if ($2 > date) print}')
+fi
+
+if [ -n "$dateBefore" ]; then # -b
+    uLog=$(echo "$uLog" | awk -v date="$dateBefore" -F ';' '{ if ($2 < date) print}')
+fi
+
+if [ -n "$uCurrency" ]; then # -c
+    uLog=$(echo "$uLog" | awk -v currency="$uCurrency" -F ';' '$0 ~ currency')
+fi
+
+# -------------------------------------------------------------------------------
+# list instruction
+# -------------------------------------------------------------------------------
+# Description:
+#       - prints lines (from a CVS formatted[;] \n deliminated string) with the  
+#         same trader name ($uTrader) as given in the argument to stdout 
+#         using sed
+# -------------------------------------------------------------------------------
+
+if [ "$uInstruction" = "list" ]
+then
+    echo "$uLog" | awk -v trader="$uTrader" -F ';' '$0 ~ trader {print}'
+    exit 0
+fi
+
+# -------------------------------------------------------------------------------
+# list-currency instruction
+# -------------------------------------------------------------------------------
+# Description:
+#       - prints alphabetically sorted and unique (sort -u) values (currency) 
+#         from currency column ($3) of one trader ($uTrader) to stdout 
+#         using awk
+# -------------------------------------------------------------------------------
+
+if [ "$uInstruction" = "list-currency" ]
+then
+    echo "$uLog" | awk -v trader="$uTrader" -F ';' '$1 == trader {print $3}' | sort -u
+    exit 0
+fi
+
+# -------------------------------------------------------------------------------
+# status instruction
+# -------------------------------------------------------------------------------
+# Description:
+#       - prints the same with just with the amount of each currency
+#           - filters currencies by traders name
+#           - if no currencies found -> exit 1
+#           - for each currency found go through each line and add up the sum
+#           - print in this format [CUR : %.4f/n] (4 decimal points)
+#           - repeat for the rest of the currencies
+# -------------------------------------------------------------------------------
+
+if [ "$uInstruction" = "status" ]
+then
+
+    #Filtering currecies by traders name
+    traderCurrencies=$(echo "$uLog" | awk -v trader="$uTrader" -F ';' '$1 == trader {print $3}' | sort -u) 
+
+    if [ -z "$traderCurrencies" ]; then #Check if tradeCurrencies is empty
+        exit 1
+    fi    
+
+    echo "$traderCurrencies" | while IFS= read -r currency; do #Loop (sum up values from one currency then print) 
+        echo "$uLog" | awk -v currency="$currency" -F ';' '
+        $3 == currency { sum += $4 } 
+        END { 
+            printf "%s : %.4f\n", currency, sum 
+        }'
+    done
+    exit 0
+fi
+
+# -------------------------------------------------------------------------------
+# profit instruction
+# -------------------------------------------------------------------------------
+# Description:
+#       - same as status it just adds a percentage amount of profit
+#       - profit is dictated by a global variable XTFPROFIT
+#           - if its not set it defaults to 20%
+#           - if no currencies found -> exit 1
+# -------------------------------------------------------------------------------
+
+if [ "$uInstruction" = "profit" ]
+then
+
+    #Logic for handling XTFPROFIT not being initialized so it defaults to 20%
+    if [ -z "$XTF_PROFIT" ]; 
+        then
+            XTF_PROFIT=120
+        else
+            XTF_PROFIT=$((XTF_PROFIT + 100))
+    fi
+
+    #Filtering currecies by traders name
+    traderCurrencies=$(echo "$uLog" | awk -v trader="$uTrader" -F ';' '$1 == trader {print $3}' | sort -u)
+
+    #Check if tradeCurrencies is empty - Fixes wrong output when trader name isnt in the log
+    if [ -z "$traderCurrencies" ]; then
+        exit 1
+    fi 
+
+    #(sum <= 0) prints only if the value is positive - (sum * (xtfProfit) / 100) percentage calculation
+    echo "$traderCurrencies" | while IFS= read -r currency; do
+        echo "$uLog" | awk -v xtfProfit="$XTF_PROFIT" -v currency="$currency" -F ';' '
+            $3 == currency { sum += $4 }
+            END { 
+                if (sum <= 0) { 
+                    printf "%s : %.4f\n", currency, sum
+                } else {
+                    printf "%s : %.4f\n", currency, (sum * (xtfProfit) / 100)
+                } 
+            }'
+    done
+    exit 0 
+fi
+
+exit 1
